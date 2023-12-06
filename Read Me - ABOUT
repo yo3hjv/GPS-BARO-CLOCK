@@ -1,0 +1,43 @@
+/*
+   UTC/Baro GPS Clock
+    Final release V2
+    Copyright Dec. 2023 - Adrian, YO3HJV
+    https://yo3hjv.blogspot.com
+    
+      Required parts:
+      -NodeMCU
+      -uBlox Neo-6 GPS unit
+      -BME280 I2C Baro-Temp module
+      -1.28" SPI TFT ST7735
+      -300 - 470KOhm resistor (something in this range). 
+      The ratio of the voltage divider will be calculated and included in the code.
+          
+      !!!!!!!!!!!!!!!!!!!!!!!!-ATTENTION-!!!!!!!!!!!!!!!!!!!!!!
+       All Vcc from GPS, TFT, BME goes to 3V pin on the NodeMCU
+       DO NOT CONNECT TO THE BATTERY UNDER NO CIRCUMSTANCES !!!
+      *********************************************************
+          Connections, relative to NodeMCU pins numbering:
+          TFT         NodeMCU pin#
+          ________________________
+          CS            D8
+          D/C           D4
+          DIN           D7
+          CLK           D5
+          RST           RST
+          BL            3V
+              
+          GPS         NodeMCU pin#
+          ________________________
+          Tx            D2
+          Rx            D6
+          GND           GNC
+          Vcc           3V          
+
+          BME280    
+          ________________________
+          I2C SDA       D1
+          I2C SCL       D3
+          GND           GND 
+          Vcc           3V          
+      
+*/
