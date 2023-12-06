@@ -92,6 +92,7 @@ int MAGENTA = 63519;
 int PINK = 63743;
 
 // DEFINE SPECIFIC COLORS FOR TFT ELEMENTS
+ int BackGroundColor = BLACK;
  int HLinesColor = MAGENTA;               
  int BoxColor = RED;                      
  int VLinesColor = WHITE;                
@@ -102,55 +103,61 @@ int PINK = 63743;
  int BTextColor = YELLOW;
  int QNHtextColor = RED;
  int DATEtextColor = YELLOW;
- int CelsiusColor = WHITE;               
-
+ int CelsiusColor = WHITE;  
+ int DotGraphColor = WHITE;  
+ int BoxFillColor = BLUE;          
 
 unsigned long previous_BME_Millis = 0;
 unsigned long current_BME_Millis = 0;
-const long interval_TFTbme = 20000;  // Pressure polling interval
+const long interval_TFTbme = 300;    // Pressure polling interval
 
 unsigned long previous_BATT_Millis = 0;
 unsigned long current_BATT_Millis = 0;
-const long interval_BATT = 400;      // Battery voltage polling interval
+const long interval_BATT = 300;      // Battery voltage polling interval
 
+// Barometer graphic area
 const int graphWidth = 128;
-const int graphHeight = 20;
+const int graphHeight = 20;    
+int xPos = 1;         
+int yPos = 123;    
+
 float pres = 0;
 float temp = 0;
-
-int xPos = 1;         
-int yPos = 123;       
-int xStartPos = 1 ;   
-int xEndPos = 126;    
 
 int i = 0;
 int hdop = 9;
 
-const int numReadings = 10;          // Number of readings to average Baro pressure
-float readings[numReadings] = {10};  
-int readIndex = 0;                   
+const float V_divider_ratio = 5.500;  // Replace with your value calculated from real values
+                                     // then fine tune the value with DEBUG_BATT function
 float Vbat = 0;
-
-
 const int vReadings = 4;             // Number of readings to average voltage
-float voltageReadings[vReadings] = {7}; 
+float voltageReadings[vReadings] = {4}; 
+int readIndex = 0;
 int j = 0;
 
 /*  Uncomment for specific debugging on Serial
     I strongly reccomend to use one at a time and not all of them    
 */
-    //#define DEBUG 1                          // Uncomment to start serial scaffold debugging
-    //#define DEBUG_GPS 1                      // GPS Library tools for debug
-    //#define DEBUG_HDOP 1
-    //#define DEBUG_BARO_G 1                   // Presure char values
-    //#define DEBUG_BME 1                      // Short debug Pressure value
-    //#define DEBUG_BATT 1                     // Battery readings
-
-
-
-
+    //#define DEBUG 1                      // Uncomment to start serial scaffold debugging
+    //#define DEBUG_GPS 1                  // GPS Library tools for debug
+    //#define DEBUG_HDOP 1                       
+    //#define DEBUG_TFT_BME 1              // Pressure and Temperature value
+      #define DEBUG_TFT_BAROGRAPH 1        // Pressure graphic math  
+    //#define DEBUG_BATT 1                 // Battery readings
+    //#define DEBUG_XPOS 1
+ 
+unsigned long previous_BARO_Millis = 0;
+unsigned long current_BARO_Millis = 0;
+const long interval_BARO = 1500;        // msec - when the Pressure readings are made - time interval between readings
+const int numPresReadings = 10;         // Number of readings to average    
+float pressures[numPresReadings];
+int currentReadingIndex = 0;
+float sumPressures = 0;
+int result = 10;
+  
+ 
 void setup() {
-      Wire.begin(D1, D3);             //Default clock is 100kHz
+      Wire.begin(D1, D3);             
       Serial.begin(115200);
       SerialGPS.begin(9600);
   
@@ -161,49 +168,14 @@ void setup() {
         bool status;
         status = bme.begin(0x76);
         if (!status) {
-          Serial.println("Could not find a valid BME280 sensor, check wiring!");
+          Serial.println("BME280 Error! Check wiring first");
           while (1)
             ;
       }
 }
 
-
-
-
-void TFT_batt() {
-                      int adc = analogRead(A0);
-                          #ifdef DEBUG_BATT
-                          Serial.print("analogRead: ");
-                          Serial.println(adc);
-                          #endif  
-                      float referenceVoltage = 1.0;    // ADC reference voltage ESP8266
-                      float voltage = adc * (referenceVoltage / 1023.0) * 5.500;  // 5.500 is ADC resistive voltage divider ratio
-                      voltageReadings[readIndex] = voltage;
-                      readIndex = (readIndex + 1) % vReadings;
-                      float sumVoltages = 0;
-                      for (int j = 0; j < vReadings; ++j) {
-                        sumVoltages += voltageReadings[i];                                               
-                                #ifdef DEBUG_BATT
-                                Serial.print("j= ");
-                                Serial.println(j);
-                                #endif
-                      }
-                      float averageVoltage = sumVoltages / vReadings;
-                              tft.setTextColor(STextColor, ST7735_BLACK);
-                              tft.setTextSize(1);
-                              tft.setCursor(97, 151);
-                              tft.setTextWrap(false);
-                              tft.printf(" %0.1f", averageVoltage);
-                      #ifdef DEBUG_BATT
-                      Serial.print("Average Voltage: ");
-                      Serial.println(averageVoltage);
-                      #endif                  
-}
-
-
-
-
-void loop() {        
+void loop() {          
+        TFT_Baro_Graph();    
         current_BATT_Millis = millis();        
         if (current_BATT_Millis - previous_BATT_Millis >= interval_BATT) {
                 previous_BATT_Millis = current_BATT_Millis;
@@ -211,19 +183,11 @@ void loop() {
                 j=++j;                                                     
             }
 
-        current_BME_Millis = millis();        
+        current_BME_Millis = millis();                
         if (current_BME_Millis - previous_BME_Millis >= interval_TFTbme) {
                 previous_BME_Millis = current_BME_Millis;
                 TFT_BME();
-                TFT_batt();
-                  xPos = ++xPos;    
-                  if(xPos > 126) {
-                    xPos = 1;
-                    tft.fillRect(0, 114, 128, 20, ST7735_BLACK);
-                    tft.drawRect(0, 114, 128, 20, BoxColor);                                                     
-            }
-        }
-                     
+        }                          
 
          while (SerialGPS.available() > 0)
                       if (gps.encode(SerialGPS.read())) {
@@ -311,72 +275,6 @@ void loop() {
                           #endif                       
 }
 
-
-
-void TFT_BARO_G() {
-          float interm_a = pres;
-          readings[readIndex] = interm_a;
-          readIndex = (readIndex + 1) % numReadings;
-          float sumResults = 0; 
-            for (int i = 0; i < numReadings; ++i) {
-              int lastTwoDigits = static_cast<int>(readings[i] * 100) % 100;
-              int result = lastTwoDigits % 21;
-              sumResults += result;
-                        #ifdef DEBUG_BARO_G
-                          Serial.print("Reading ");
-                          Serial.print(i);
-                          Serial.print(": ");
-                          Serial.print(result);
-                          Serial.print(" | ");
-                        #endif
-            }
-                      int averageResult = static_cast<int>(sumResults / numReadings); 
-                      yPos = map (averageResult, 0, 19, 132, 115);      
-                      tft.drawPixel(xPos, yPos, ST7735_WHITE);
-                          #ifdef DEBUG_BARO_G
-                            Serial.print("Average Result: ");
-                            Serial.println(averageResult);
-                          #endif
-            
-}
-
-
-
-void TFT_BME() {
-          temp = bme.readTemperature(); 
-          pres = bme.readPressure();     
-          TFT_BARO_G();
-                          #ifdef DEBUG
-                              Serial.print("Temperature: "); Serial.println(temp);
-                              Serial.print("Pressure: "); Serial.println(pres);    
-                          #endif
-              tft.setTextColor(STextColor, ST7735_BLACK);
-              tft.setTextSize(1);
-              tft.setCursor(73, 151);
-              tft.setTextWrap(false);
-          if (temp < 0)      
-              tft.printf("-%02u", (int)abs(temp));
-          else
-              tft.printf(" %02u", (int)temp);
-                   
-              tft.setTextColor(STextColor, ST7735_BLACK);
-              tft.setTextSize(1);
-              tft.setCursor(29, 151);
-              tft.setTextWrap(false);
-          if (pres < 1000) {
-              tft.printf("%3u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
-          } else {
-              tft.printf("%4u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
-          }
- 
-                  #ifdef DEBUG_BME
-                    Serial.print("Pres. Value: ");
-                    Serial.println(pres);
-                    Serial.println();
-                  #endif      
-}
-
-
 void TFT_MetaGPS() {  
                 NO_OF_SAT = gps.satellites.value();
                 SatString = "";
@@ -394,7 +292,7 @@ void TFT_MetaGPS() {
                           
                     #endif
               
-                      // Numarul de sateliti  OK
+                      // Sat#
                       tft.setTextColor(STextColor, ST7735_BLACK);
                       tft.setTextSize(1);
                       tft.setCursor(112, 10);
@@ -421,8 +319,6 @@ void TFT_MetaGPS() {
                       tft.print(" -");       
 }
 
-
-
 void TFT_Maidenhead() {  
           char* locator6 = get_mh(Latitude, Longitude, 6);  
           MaidString = String(locator6);
@@ -437,7 +333,6 @@ void TFT_Maidenhead() {
                     #endif
 }
 
-
 void TFT_Time(){
       tft.setTextColor(BTextColor ,ST7735_BLACK);
       tft.setTextSize(2);
@@ -450,7 +345,6 @@ void TFT_Time(){
                     #endif                       
 }
 
-
 void TFT_Date(){     
       tft.setTextColor(DATEtextColor ,ST7735_BLACK);
       tft.setTextSize(1);
@@ -462,7 +356,6 @@ void TFT_Date(){
                     Serial.println(DateString); 
                     #endif
 }
-
 
 void TFT_LatLon() {
       tft.setTextColor(CoordColor ,ST7735_BLACK);
@@ -485,6 +378,135 @@ void TFT_LatLon() {
             #endif
 }
 
+void TFT_BME() {  // Just show Pres and Temp on TFT
+          temp = bme.readTemperature(); 
+          pres = bme.readPressure();     
+          
+              tft.setTextColor(STextColor, BackGroundColor);
+              tft.setTextSize(1);
+              tft.setCursor(73, 151);
+              tft.setTextWrap(false);
+          if (temp < 0)      
+              tft.printf("-%02u", (int)abs(temp));
+          else
+              tft.printf(" %02u", (int)temp);
+                   
+              tft.setTextColor(STextColor, BackGroundColor);
+              tft.setTextSize(1);
+              tft.setCursor(29, 151);
+              tft.setTextWrap(false);
+          if (pres < 1000) {
+              tft.printf("%3u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
+          } else {
+              tft.printf("%4u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
+          }
+ 
+                  #ifdef DEBUG_TFT_BME
+                    Serial.println("TFT_BME()");
+                    Serial.print("Pressure: ")
+                    Serial.println(pres);
+                    Serial.print("Temperature: ")
+                    Serial.println(temp);
+                    Serial.println();
+                  #endif      
+}
+
+void TFT_Baro_Graph () {
+              unsigned long current_BARO_Millis = millis();
+              if (current_BARO_Millis - previous_BARO_Millis >= interval_BARO) {
+                previous_BARO_Millis = current_BARO_Millis;
+                float pres = bme.readPressure();
+                pressures[currentReadingIndex] = pres;
+                sumPressures += pres;
+                currentReadingIndex = (currentReadingIndex + 1) % numPresReadings;                
+                if (currentReadingIndex == 0) {
+                  float averagePressure = sumPressures / numPresReadings;               
+                      #ifdef DEBUG_TFT_BAROGRAPH
+                            Serial.println();
+                            Serial.print("Average Pressure: ");
+                            Serial.println(averagePressure, 2 );
+                          #endif            
+                                            
+                                  // Convert averagePressure to a string
+                  char buffer[15];  // Adjust the buffer size based on the expected length
+                  snprintf(buffer, sizeof(buffer), "%.2f", averagePressure);
+                  
+                            #ifdef DEBUG_TFT_BAROGRAPH
+                            Serial.print("String buffer:");
+                            Serial.println(buffer);
+                            #endif
+                // Extract the 5th and 6th digits from the right, counting from the decimal point
+                  int length = strlen(buffer);
+                  int fifthDigit = (length >= 5) ? (buffer[length - 5] - '0') : 0;
+                  int sixthDigit = (length >= 6) ? (buffer[length - 6] - '0') : 0;
+
+
+                          #ifdef DEBUG_TFT_BAROGRAPH
+                                Serial.print("Fifth Digit: ");
+                                Serial.println(fifthDigit);
+                                Serial.print("Sixth Digit: ");
+                                Serial.println(sixthDigit);
+                          #endif
+
+                                // Combine the second and third digits into a single value
+                                int extractedValue = sixthDigit * 10 + fifthDigit;
+
+                          #ifdef DEBUG_TFT_BAROGRAPH
+                                Serial.print("Extracted Value: ");
+                                Serial.println(extractedValue);
+                          #endif              
+                  drawPixel();                
+                  currentReadingIndex = 0;
+                  sumPressures = 0;
+    }
+  }
+   
+}
+
+void drawPixel(){
+                  xPos += 1; 
+                  if(xPos >126){
+                          tft.fillRect(0, 114, 128, 20, BoxFillColor);
+                          tft.drawRect(0, 114, 128, 20, BoxColor);
+                          xPos = 1;                    
+                            }        
+                  yPos = map (result, 0, 19, 132, 115);      
+                  tft.drawPixel(xPos, yPos, DotGraphColor);
+                      #ifdef DEBUG_XPOS
+                      Serial.print("xPos= ");
+                      Serial.println(xPos);
+                      #endif   
+}
+
+void TFT_batt() {
+                      int adc = analogRead(A0);
+                          #ifdef DEBUG_BATT
+                          Serial.print("analogRead: ");
+                          Serial.println(adc);
+                          #endif  
+                      float referenceVoltage = 1.0;                               // ADC reference voltage ESP8266
+                      float voltage = adc * (referenceVoltage / 1023.0) * V_divider_ratio;  // 5.500 is ADC resistive voltage divider ratio
+                      voltageReadings[readIndex] = voltage;
+                      readIndex = (readIndex + 1) % vReadings;
+                      float sumVoltages = 0;
+                      for (int j = 0; j < vReadings; ++j) {
+                        sumVoltages += voltageReadings[i];                                               
+                                #ifdef DEBUG_BATT
+                                Serial.print("j= ");
+                                Serial.println(j);
+                                #endif
+                      }
+                      float averageVoltage = sumVoltages / vReadings;
+                              tft.setTextColor(STextColor, BackGroundColor);
+                              tft.setTextSize(1);
+                              tft.setCursor(97, 151);
+                              tft.setTextWrap(false);
+                              tft.printf(" %0.1f", averageVoltage);
+                      #ifdef DEBUG_BATT
+                      Serial.print("Average Voltage: ");
+                      Serial.println(averageVoltage);
+                      #endif                  
+}
 
 void TFT_static() {  
   tft.drawLine(0, 20, 127, 20, HLinesColor);       // Orizontala de sub Lat/Lon - prima de sus
@@ -494,6 +516,7 @@ void TFT_static() {
   tft.drawLine(0, 89, 127, 89, HLinesColor);       // Orizontala de sub graficul QNH - ultima de jos, sub Box
   
   tft.drawRect(0, 114, 128, 20, BoxColor);         // Box pentru grafic QNH
+  tft.fillRect(0, 114, 128, 20, BoxFillColor);
     tft.drawPixel(0, 112, DotColor);               // Box ticks
     tft.drawPixel(7, 112, DotColor);
     tft.drawPixel(15, 112, DotColor);
@@ -517,67 +540,67 @@ void TFT_static() {
   tft.drawLine(69, 140, 69, 158, VLinesColor);     // Second
   tft.drawLine(96, 140, 96, 158, VLinesColor);     // Third
 
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(1, 0);
   tft.setTextWrap(false);
   tft.print("Lat:");
   
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(1, 10);
   tft.setTextWrap(false);
   tft.print("Lon:");
 
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(106, 0);
   tft.setTextWrap(false);
   tft.print("SAT:");
 
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(1, 29);
   tft.setTextWrap(false);
   tft.print("UTC:");
   
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(1, 50);
   tft.setTextWrap(false);
   tft.print("Loc:");
 
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(1, 74);
   tft.setTextWrap(false);
   tft.print("G.asl:");  
   
-  tft.setTextColor(BTextColor);     
+  tft.setTextColor(BTextColor, BackGroundColor);     
   tft.setTextSize(2);
   tft.setCursor(108, 71);
   tft.setTextWrap(false);
   tft.print("m");
 
-    tft.setTextColor(QNHtextColor);   
+    tft.setTextColor(QNHtextColor, BackGroundColor);   
     tft.setTextSize(1);
     tft.setCursor(1, 95);
     tft.setTextWrap(false);
     tft.print("QNH survey:");
   
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(2, 140);
   tft.setTextWrap(false);
   tft.print("DOP");
   
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(26, 140);
   tft.setTextWrap(false);
   tft.print("QNH hPa");
 
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(73, 140);
   tft.setTextWrap(false);
@@ -590,13 +613,13 @@ void TFT_static() {
   tft.setTextWrap(false);
   tft.print("C");
   
-  tft.setTextColor(FixedTextColor);
+  tft.setTextColor(FixedTextColor, BackGroundColor);
   tft.setTextSize(1);
   tft.setCursor(102, 140);
   tft.setTextWrap(false);
   tft.print("Batt");
   
-  tft.setTextColor(STextColor);  
+  tft.setTextColor(STextColor, BackGroundColor);  
   tft.setTextSize(1);
   tft.setCursor(121, 151);
   tft.setTextWrap(false);
