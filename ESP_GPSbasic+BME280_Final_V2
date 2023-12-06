@@ -1,0 +1,605 @@
+/*
+   UTC/Baro GPS Clock
+    Final release V2
+    Copyright Dec. 2023 - Adrian, YO3HJV
+    https://yo3hjv.blogspot.com
+    
+      Required parts:
+      -NodeMCU
+      -uBlox Neo-6 GPS unit
+      -BME280 I2C Baro-Temp module
+      -1.28" SPI TFT ST7735
+      -300 - 470KOhm resistor (something in this range). 
+      The ratio of the voltage divider will be calculated and included in the code.
+          
+      !!!!!!!!!!!!!!!!!!!!!!!!-ATTENTION-!!!!!!!!!!!!!!!!!!!!!!
+       All Vcc from GPS, TFT, BME goes to 3V pin on the NodeMCU
+       DO NOT CONNECT TO THE BATTERY UNDER NO CIRCUMSTANCES !!!
+      *********************************************************
+          Connections, relative to NodeMCU pins numbering:
+          TFT         NodeMCU pin#
+          ________________________
+          CS            D8
+          D/C           D4
+          DIN           D7
+          CLK           D5
+          RST           RST
+          BL            3V
+              
+          GPS         NodeMCU pin#
+          ________________________
+          Tx            D2
+          Rx            D6
+          GND           GNC
+          Vcc           3V          
+
+          BME280    
+          ________________________
+          I2C SDA       D1
+          I2C SCL       D3
+          GND           GND 
+          Vcc           3V          
+      
+*/
+
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <ESP8266WiFi.h>
+#include <maidenhead.h>
+#include <Wire.h>             
+#include <Adafruit_GFX.h>     
+#include <Adafruit_ST7735.h>  
+#include <Adafruit_BME280.h>  
+
+// TFT
+#define TFT_RST -1  
+#define TFT_CS D8   
+#define TFT_DC D4   
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+// BME280 address: 0x76 or 0x77 (0x77 is library default address)
+#define BME280_I2C_ADDRESS 0x76
+Adafruit_BME280 bme; 
+
+//GPS
+TinyGPSPlus gps;                       
+TinyGPSCustom pdop(gps, "GPGSA", 15);  
+SoftwareSerial SerialGPS(D2, D0);
+
+int NO_OF_SAT = 0;
+float ACT_HDOP = 0;
+
+float Latitude, Longitude;
+int year, month, date, hour, minute, second;
+double Altitude;
+
+String DateString, TimeString, LatitudeString, LongitudeString, SatString, HdopString, MaidString, PresString, AltString;
+
+
+//  COLORS
+
+int BLACK = 0;
+int WHITE = 65535;
+int RED = 63488;
+int ORANGE = 64096;
+int YELLOW = 65504;  // OK
+int GREEN = 2016;
+int CYAN = 2047;     // 
+int AQUA = 1279;
+int BLUE =  31;
+int MAGENTA = 63519;
+int PINK = 63743;
+
+// DEFINE SPECIFIC COLORS FOR TFT ELEMENTS
+ int HLinesColor = MAGENTA;               
+ int BoxColor = RED;                      
+ int VLinesColor = WHITE;                
+ int DotColor = WHITE;                    
+ int FixedTextColor = WHITE; 
+ int CoordColor = YELLOW; 
+ int STextColor =  WHITE;
+ int BTextColor = YELLOW;
+ int QNHtextColor = RED;
+ int DATEtextColor = YELLOW;
+ int CelsiusColor = WHITE;               
+
+
+unsigned long previous_BME_Millis = 0;
+unsigned long current_BME_Millis = 0;
+const long interval_TFTbme = 20000;  // Pressure polling interval
+
+unsigned long previous_BATT_Millis = 0;
+unsigned long current_BATT_Millis = 0;
+const long interval_BATT = 400;      // Battery voltage polling interval
+
+const int graphWidth = 128;
+const int graphHeight = 20;
+float pres = 0;
+float temp = 0;
+
+int xPos = 1;         
+int yPos = 123;       
+int xStartPos = 1 ;   
+int xEndPos = 126;    
+
+int i = 0;
+int hdop = 9;
+
+const int numReadings = 10;          // Number of readings to average Baro pressure
+float readings[numReadings] = {10};  
+int readIndex = 0;                   
+float Vbat = 0;
+
+
+const int vReadings = 4;             // Number of readings to average voltage
+float voltageReadings[vReadings] = {7}; 
+int j = 0;
+
+/*  Uncomment for specific debugging on Serial
+    I strongly reccomend to use one at a time and not all of them    
+*/
+    //#define DEBUG 1                          // Uncomment to start serial scaffold debugging
+    //#define DEBUG_GPS 1                      // GPS Library tools for debug
+    //#define DEBUG_HDOP 1
+    //#define DEBUG_BARO_G 1                   // Presure char values
+    //#define DEBUG_BME 1                      // Short debug Pressure value
+    //#define DEBUG_BATT 1                     // Battery readings
+
+
+
+
+void setup() {
+      Wire.begin(D1, D3);             //Default clock is 100kHz
+      Serial.begin(115200);
+      SerialGPS.begin(9600);
+  
+      tft.initR(INITR_BLACKTAB);     
+      tft.fillScreen(ST7735_BLACK);  
+      TFT_static(); 
+      
+        bool status;
+        status = bme.begin(0x76);
+        if (!status) {
+          Serial.println("Could not find a valid BME280 sensor, check wiring!");
+          while (1)
+            ;
+      }
+}
+
+
+
+
+void TFT_batt() {
+                      int adc = analogRead(A0);
+                          #ifdef DEBUG_BATT
+                          Serial.print("analogRead: ");
+                          Serial.println(adc);
+                          #endif  
+                      float referenceVoltage = 1.0;    // ADC reference voltage ESP8266
+                      float voltage = adc * (referenceVoltage / 1023.0) * 5.500;  // 5.500 is ADC resistive voltage divider ratio
+                      voltageReadings[readIndex] = voltage;
+                      readIndex = (readIndex + 1) % vReadings;
+                      float sumVoltages = 0;
+                      for (int j = 0; j < vReadings; ++j) {
+                        sumVoltages += voltageReadings[i];                                               
+                                #ifdef DEBUG_BATT
+                                Serial.print("j= ");
+                                Serial.println(j);
+                                #endif
+                      }
+                      float averageVoltage = sumVoltages / vReadings;
+                              tft.setTextColor(STextColor, ST7735_BLACK);
+                              tft.setTextSize(1);
+                              tft.setCursor(97, 151);
+                              tft.setTextWrap(false);
+                              tft.printf(" %0.1f", averageVoltage);
+                      #ifdef DEBUG_BATT
+                      Serial.print("Average Voltage: ");
+                      Serial.println(averageVoltage);
+                      #endif                  
+}
+
+
+
+
+void loop() {        
+        current_BATT_Millis = millis();        
+        if (current_BATT_Millis - previous_BATT_Millis >= interval_BATT) {
+                previous_BATT_Millis = current_BATT_Millis;
+                TFT_batt();
+                j=++j;                                                     
+            }
+
+        current_BME_Millis = millis();        
+        if (current_BME_Millis - previous_BME_Millis >= interval_TFTbme) {
+                previous_BME_Millis = current_BME_Millis;
+                TFT_BME();
+                TFT_batt();
+                  xPos = ++xPos;    
+                  if(xPos > 126) {
+                    xPos = 1;
+                    tft.fillRect(0, 114, 128, 20, ST7735_BLACK);
+                    tft.drawRect(0, 114, 128, 20, BoxColor);                                                     
+            }
+        }
+                     
+
+         while (SerialGPS.available() > 0)
+                      if (gps.encode(SerialGPS.read())) {
+                        if (gps.location.isUpdated()) {
+                          Latitude = gps.location.lat();
+                          LatitudeString = String(Latitude, 6); 
+                          Longitude = gps.location.lng();
+                          LongitudeString = String(Longitude, 6); 
+                        TFT_LatLon();
+                        TFT_Maidenhead();        
+                        }
+
+                        if (gps.date.isUpdated()) {
+                          DateString = "";
+                          date = gps.date.day();
+                          month = gps.date.month();
+                          year = gps.date.year();
+
+                          if (date < 10)
+                            DateString = '0';
+                            DateString += String(date);
+                            DateString += "/";
+
+                          if (month < 10)
+                            DateString += '0';
+                            DateString += String(month);
+                            DateString += "/";
+
+                          if (year < 10)
+                            DateString += '0';
+                            DateString += String(year);
+                              
+                        TFT_Date();                       
+                                
+                        }
+
+                        if (gps.time.isUpdated()) {
+                          TimeString = "";
+                          hour = gps.time.hour();  //adjust UTC by adding "+3"
+                          minute = gps.time.minute();
+                          second = gps.time.second();
+
+                          if (hour < 10)
+                            TimeString = '0';
+                          TimeString += String(hour);
+                          TimeString += ":";
+
+                          if (minute < 10)
+                            TimeString += '0';
+                          TimeString += String(minute);
+                          TimeString += ":";
+
+                          if (second < 10)
+                            TimeString += '0';
+                          TimeString += String(second);
+                        TFT_Time();
+                        }
+
+                        if (gps.altitude.isUpdated() || gps.satellites.isUpdated() || gps.hdop.isUpdated()) {
+                          TFT_MetaGPS(); 
+                            #ifdef DEBUG
+                            Serial.print("Altitude set: ");
+                            Serial.println(gps.altitude.meters());
+                            #endif
+                        }
+                      }
+                          
+                          #ifdef DEBUG_GPS
+                              Serial.print("Chars Processed= ");
+                              Serial.println(gps.charsProcessed());
+                              Serial.print("Sentences that passed checksum= ");
+                              Serial.println(gps.passedChecksum());
+                              Serial.print("Sentences that failed checksum= ");
+                              Serial.println(gps.failedChecksum());
+                              Serial.print("Soft Serial device overflowed? ");
+                              Serial.println(SerialGPS.overflow() ? "YES!" : "No");
+                              Serial.print("Sentences with Fix: ");
+                              Serial.println(gps.sentencesWithFix() );                            
+                              Serial.println();
+                              Serial.print(F("ALTITUDE   Fix Age= "));
+                              Serial.print(gps.altitude.age());
+                              Serial.print(F("ms Raw= "));
+                              Serial.print(gps.altitude.value());
+                              Serial.println(F(" Meters="));
+                          #endif                       
+}
+
+
+
+void TFT_BARO_G() {
+          float interm_a = pres;
+          readings[readIndex] = interm_a;
+          readIndex = (readIndex + 1) % numReadings;
+          float sumResults = 0; 
+            for (int i = 0; i < numReadings; ++i) {
+              int lastTwoDigits = static_cast<int>(readings[i] * 100) % 100;
+              int result = lastTwoDigits % 21;
+              sumResults += result;
+                        #ifdef DEBUG_BARO_G
+                          Serial.print("Reading ");
+                          Serial.print(i);
+                          Serial.print(": ");
+                          Serial.print(result);
+                          Serial.print(" | ");
+                        #endif
+            }
+                      int averageResult = static_cast<int>(sumResults / numReadings); 
+                      yPos = map (averageResult, 0, 19, 132, 115);      
+                      tft.drawPixel(xPos, yPos, ST7735_WHITE);
+                          #ifdef DEBUG_BARO_G
+                            Serial.print("Average Result: ");
+                            Serial.println(averageResult);
+                          #endif
+            
+}
+
+
+
+void TFT_BME() {
+          temp = bme.readTemperature(); 
+          pres = bme.readPressure();     
+          TFT_BARO_G();
+                          #ifdef DEBUG
+                              Serial.print("Temperature: "); Serial.println(temp);
+                              Serial.print("Pressure: "); Serial.println(pres);    
+                          #endif
+              tft.setTextColor(STextColor, ST7735_BLACK);
+              tft.setTextSize(1);
+              tft.setCursor(73, 151);
+              tft.setTextWrap(false);
+          if (temp < 0)      
+              tft.printf("-%02u", (int)abs(temp));
+          else
+              tft.printf(" %02u", (int)temp);
+                   
+              tft.setTextColor(STextColor, ST7735_BLACK);
+              tft.setTextSize(1);
+              tft.setCursor(29, 151);
+              tft.setTextWrap(false);
+          if (pres < 1000) {
+              tft.printf("%3u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
+          } else {
+              tft.printf("%4u.%01u", (int)(pres / 100), (int)((uint32_t)pres % 100) / 10);
+          }
+ 
+                  #ifdef DEBUG_BME
+                    Serial.print("Pres. Value: ");
+                    Serial.println(pres);
+                    Serial.println();
+                  #endif      
+}
+
+
+void TFT_MetaGPS() {  
+                NO_OF_SAT = gps.satellites.value();
+                SatString = "";
+                SatString = String(NO_OF_SAT);
+                ACT_HDOP = gps.hdop.hdop();                     
+                hdop = map(ACT_HDOP, 1, 100, 0, 9);
+
+                    #ifdef DEBUG_HDOP
+                    Serial.println();
+                          Serial.print("Sat: ");
+                          Serial.println(SatString);
+
+                          Serial.print("HDOP: ");
+                          Serial.println(hdop);
+                          
+                    #endif
+              
+                      // Numarul de sateliti  OK
+                      tft.setTextColor(STextColor, ST7735_BLACK);
+                      tft.setTextSize(1);
+                      tft.setCursor(112, 10);
+                      tft.setTextWrap(false);
+                      tft.print(SatString);
+
+                      // HDOP
+                      tft.setTextColor(STextColor);
+                      tft.setTextSize(1);
+                      tft.setCursor(6, 151);
+                      tft.setTextWrap(false);
+                      tft.print(hdop);
+
+                      // GPS a.s.l.
+                      tft.setTextColor(BTextColor);
+                      tft.setTextSize(2);
+                      tft.setCursor(42, 71);
+                      tft.setTextWrap(false);
+
+              if(gps.altitude.isValid()) {       
+                      tft.print(Altitude); 
+              }        
+              else
+                      tft.print(" -");       
+}
+
+
+
+void TFT_Maidenhead() {  
+          char* locator6 = get_mh(Latitude, Longitude, 6);  
+          MaidString = String(locator6);
+              tft.setTextColor(BTextColor);
+              tft.setTextSize(2);
+              tft.setCursor(42, 48);
+              tft.setTextWrap(false);
+              tft.print(MaidString);
+                    #ifdef DEBUG
+                    Serial.print("Loc QTH 6 char locator is ");
+                    Serial.println(MaidString);  
+                    #endif
+}
+
+
+void TFT_Time(){
+      tft.setTextColor(BTextColor ,ST7735_BLACK);
+      tft.setTextSize(2);
+      tft.setCursor(32, 25);
+      tft.setTextWrap(false);
+      tft.print(TimeString);            
+                    #ifdef DEBUG
+                    Serial.print("Time: ");
+                    Serial.println(TimeString);  
+                    #endif                       
+}
+
+
+void TFT_Date(){     
+      tft.setTextColor(DATEtextColor ,ST7735_BLACK);
+      tft.setTextSize(1);
+      tft.setCursor(67, 95);
+      tft.setTextWrap(false);
+      tft.print(DateString);
+                    #ifdef DEBUG
+                    Serial.print("Date: ");
+                    Serial.println(DateString); 
+                    #endif
+}
+
+
+void TFT_LatLon() {
+      tft.setTextColor(CoordColor ,ST7735_BLACK);
+      tft.setTextSize(1);
+      tft.setCursor(27, 0);
+      tft.setTextWrap(false);
+      tft.print(LatitudeString);
+
+      tft.setTextColor(CoordColor ,ST7735_BLACK);
+      tft.setTextSize(1);
+      tft.setCursor(27, 10);
+      tft.setTextWrap(false);
+      tft.print(LongitudeString);
+
+            #ifdef DEBUG
+            Serial.print("Lat: ");
+            Serial.println(LatitudeString);  // 
+            Serial.print("Lon: ");
+            Serial.println(LongitudeString);  // 
+            #endif
+}
+
+
+void TFT_static() {  
+  tft.drawLine(0, 20, 127, 20, HLinesColor);       // Orizontala de sub Lat/Lon - prima de sus
+  tft.drawLine(0, 43, 127, 43, HLinesColor);       // Orizontala de sub UTC - a doua de sus
+  tft.drawLine(0, 66, 127, 66, HLinesColor);       // Orizontala de sub QTH Locator - a treia de sus
+  tft.drawLine(0, 137, 127, 137, HLinesColor);     // Orizontala de sub GPSasl - a patra de sus
+  tft.drawLine(0, 89, 127, 89, HLinesColor);       // Orizontala de sub graficul QNH - ultima de jos, sub Box
+  
+  tft.drawRect(0, 114, 128, 20, BoxColor);         // Box pentru grafic QNH
+    tft.drawPixel(0, 112, DotColor);               // Box ticks
+    tft.drawPixel(7, 112, DotColor);
+    tft.drawPixel(15, 112, DotColor);
+    tft.drawPixel(23, 112, DotColor);
+    tft.drawPixel(31, 112, DotColor);
+    tft.drawPixel(39, 112, DotColor);
+    tft.drawPixel(47, 112, DotColor);
+    tft.drawPixel(55, 112, DotColor);
+    tft.drawPixel(63, 112, DotColor);
+    tft.drawPixel(71, 112, DotColor);
+    tft.drawPixel(79, 112, DotColor);
+    tft.drawPixel(87, 112, DotColor);
+    tft.drawPixel(95, 112, DotColor);
+    tft.drawPixel(103, 112, DotColor);
+    tft.drawPixel(111, 112, DotColor);
+    tft.drawPixel(119, 112, DotColor);
+    tft.drawPixel(127, 112, DotColor);
+ 
+  tft.drawLine(97, 1, 97, 16, VLinesColor);        // vertical Up Right Sat number                            
+  tft.drawLine(21, 140, 21, 158, VLinesColor);     // First vertical down left
+  tft.drawLine(69, 140, 69, 158, VLinesColor);     // Second
+  tft.drawLine(96, 140, 96, 158, VLinesColor);     // Third
+
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(1, 0);
+  tft.setTextWrap(false);
+  tft.print("Lat:");
+  
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(1, 10);
+  tft.setTextWrap(false);
+  tft.print("Lon:");
+
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(106, 0);
+  tft.setTextWrap(false);
+  tft.print("SAT:");
+
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(1, 29);
+  tft.setTextWrap(false);
+  tft.print("UTC:");
+  
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(1, 50);
+  tft.setTextWrap(false);
+  tft.print("Loc:");
+
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(1, 74);
+  tft.setTextWrap(false);
+  tft.print("G.asl:");  
+  
+  tft.setTextColor(BTextColor);     
+  tft.setTextSize(2);
+  tft.setCursor(108, 71);
+  tft.setTextWrap(false);
+  tft.print("m");
+
+    tft.setTextColor(QNHtextColor);   
+    tft.setTextSize(1);
+    tft.setCursor(1, 95);
+    tft.setTextWrap(false);
+    tft.print("QNH survey:");
+  
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(2, 140);
+  tft.setTextWrap(false);
+  tft.print("DOP");
+  
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(26, 140);
+  tft.setTextWrap(false);
+  tft.print("QNH hPa");
+
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(73, 140);
+  tft.setTextWrap(false);
+  tft.print("T");
+
+  tft.drawCircle(85, 142, 2, FixedTextColor);
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(89, 140);
+  tft.setTextWrap(false);
+  tft.print("C");
+  
+  tft.setTextColor(FixedTextColor);
+  tft.setTextSize(1);
+  tft.setCursor(102, 140);
+  tft.setTextWrap(false);
+  tft.print("Batt");
+  
+  tft.setTextColor(STextColor);  
+  tft.setTextSize(1);
+  tft.setCursor(121, 151);
+  tft.setTextWrap(false);
+  tft.print("V");
+}
+
