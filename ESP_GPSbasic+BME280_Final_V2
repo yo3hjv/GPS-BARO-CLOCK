@@ -1,6 +1,6 @@
 /*
    UTC/Baro GPS Clock
-    Final release V2
+    Final release V4
     Copyright Dec. 2023 - Adrian, YO3HJV
     https://yo3hjv.blogspot.com
     
@@ -142,7 +142,7 @@ int j = 0;
     //#define DEBUG_GPS 1                  // GPS Library tools for debug
     //#define DEBUG_HDOP 1                       
     //#define DEBUG_TFT_BME 1              // Pressure and Temperature value
-      #define DEBUG_TFT_BAROGRAPH 1        // Pressure graphic math  
+    //#define DEBUG_TFT_BAROGRAPH 1        // Pressure graphic math  
     //#define DEBUG_BATT 1                 // Battery readings
     //#define DEBUG_XPOS 1
  
